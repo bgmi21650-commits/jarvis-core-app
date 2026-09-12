@@ -14,14 +14,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         checkAndLaunchJarvis();
     }
 
     private void checkAndLaunchJarvis() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
-                Toast.makeText(this, "JARVIS ko 'Display over other apps' allow karein", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Overlay permission allow karein", Toast.LENGTH_LONG).show();
                 Intent intent = new Intent(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         Uri.parse("package:" + getPackageName())
@@ -30,7 +29,6 @@ public class MainActivity extends Activity {
                 return;
             }
         }
-
         launchService();
     }
 
@@ -41,7 +39,6 @@ public class MainActivity extends Activity {
         } else {
             startService(serviceIntent);
         }
-        Toast.makeText(this, "JARVIS Twin Core Active! ⚡", Toast.LENGTH_SHORT).show();
         finish();
     }
 
@@ -52,22 +49,7 @@ public class MainActivity extends Activity {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
                 launchService();
             } else {
-                Toast.makeText(this, "Permission zaroori hai JARVIS overlay chalane ke liye.", Toast.LENGTH_SHORT).show();
-                finish();
-            }
-        }
-    }
-}        finish();
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == OVERLAY_PERMISSION_REQ_CODE) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-                launchJarvisService();
-            } else {
-                Toast.makeText(this, "Permission denied. Cannot start JARVIS.", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Permission denied", Toast.LENGTH_SHORT).show();
                 finish();
             }
         }
