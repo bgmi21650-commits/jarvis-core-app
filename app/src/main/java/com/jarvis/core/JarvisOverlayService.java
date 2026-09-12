@@ -11,10 +11,12 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraManager;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.BatteryManager;
@@ -50,14 +52,14 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Locale;
-import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class JarvisOverlayService extends Service implements TextToSpeech.OnInitListener {
     private WindowManager wm;
     private FrameLayout rootContainer;
-    private LinearLayout avatarContainer, hudPanel;
+    private LinearLayout avatarCard;
+    private LinearLayout hudPanel;
     private TextView speechBubble;
     private WindowManager.LayoutParams params;
 
@@ -71,13 +73,12 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
     private CameraManager cameraManager;
     private String cameraId;
     private SpeechRecognizer speechRecognizer;
+    private AudioManager audioManager;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Random random = new Random();
     private final ExecutorService networkPool = Executors.newSingleThreadExecutor();
-    private Runnable roamRunnable;
 
-    private static final String CHANNEL_ID = "jarvis_hunter_channel";
+    private static final String CHANNEL_ID = "hunter_cha_channel";
     private static final String ACTION_TOGGLE = "ACTION_TOGGLE_HUNTER";
 
     @Override
@@ -91,11 +92,11 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
         initHardware();
         initSpeechRecognizer();
         initUI();
-        startRoaming();
     }
 
     private void initHardware() {
         backupTts = new TextToSpeech(this, this);
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         try {
             if (cameraManager != null && cameraManager.getCameraIdList().length > 0) {
@@ -109,22 +110,24 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
             if (SpeechRecognizer.isRecognitionAvailable(this)) {
                 speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
                 speechRecognizer.setRecognitionListener(new RecognitionListener() {
-                    @Override public void onReadyForSpeech(Bundle params) { showBubble("Sun rahi hoon... 🎙️"); }
+                    @Override public void onReadyForSpeech(Bundle p) { showBubble("Sun rahi hoon, boliye... 🎙️"); }
                     @Override public void onBeginningOfSpeech() {}
-                    @Override public void onRmsChanged(float rmsdB) {}
-                    @Override public void onBufferReceived(byte[] buffer) {}
-                    @Override public void onEndOfSpeech() { showBubble("Soch rahi hoon... ⏳"); }
-                    @Override public void onError(int error) { showBubble("Aawaz nahi aayi!"); }
-                    @Override public void onResults(Bundle results) {
+                    @Override public void onRmsChanged(float rms) {}
+                    @Override public void onBufferReceived(byte[] b) {}
+                    @Override public void onEndOfSpeech() { showBubble("Processing... ⏳"); }
+                    @Override public void onError(int e) { showBubble("Aawaz saaf nahi aayi!"); }
+
+                    @Override
+                    public void onResults(Bundle results) {
                         ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                         if (matches != null && !matches.isEmpty()) {
                             String spoken = matches.get(0);
                             showBubble("You: " + spoken);
-                            fetchDeepAIResponse(spoken);
+                            processCommandOrAskAI(spoken);
                         }
                     }
-                    @Override public void onPartialResults(Bundle partialResults) {}
-                    @Override public void onEvent(int eventType, Bundle params) {}
+                    @Override public void onPartialResults(Bundle p) {}
+                    @Override public void onEvent(int t, Bundle p) {}
                 });
             }
         });
@@ -137,6 +140,8 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN");
                 speechRecognizer.startListening(intent);
+            } else {
+                Toast.makeText(this, "Voice recognition available nahi hai!", Toast.LENGTH_SHORT).show();
             }
         });
     }
@@ -145,6 +150,7 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
     public void onInit(int status) {
         if (status == TextToSpeech.SUCCESS && backupTts != null) {
             backupTts.setLanguage(new Locale("hi", "IN"));
+            backupTts.setPitch(1.1f);
         }
     }
 
@@ -164,12 +170,12 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
                         mediaPlayer.prepareAsync();
                         mediaPlayer.setOnPreparedListener(MediaPlayer::start);
                     } catch (Exception ex) {
-                        if (backupTts != null) backupTts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FB");
+                        if (backupTts != null) backupTts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FALLBACK");
                     }
                 });
             } catch (Exception e) {
                 handler.post(() -> {
-                    if (backupTts != null) backupTts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FB");
+                    if (backupTts != null) backupTts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FALLBACK");
                 });
             }
         });
@@ -182,103 +188,199 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
                 : WindowManager.LayoutParams.TYPE_PHONE;
 
         params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-                layoutType, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
         );
         params.gravity = Gravity.TOP | Gravity.START;
-        params.x = 100;
-        params.y = 400;
+        params.x = 60;
+        params.y = 350;
 
         rootContainer = new FrameLayout(this);
 
+        // Speech Bubble
         speechBubble = new TextView(this);
-        speechBubble.setText("Hunter Cha online! ✨");
+        speechBubble.setText("Hunter Cha ready! ⚔️");
         speechBubble.setTextColor(Color.WHITE);
         speechBubble.setTextSize(12);
-        speechBubble.setPadding(20, 10, 20, 10);
-        speechBubble.setBackground(createBg("#EE0B0F19", "#FFB703", 20f, 2));
+        speechBubble.setPadding(24, 14, 24, 14);
+        speechBubble.setBackground(createBg("#F20F172A", "#38BDF8", 20f, 2));
         speechBubble.setVisibility(View.GONE);
 
-        avatarContainer = new LinearLayout(this);
-        avatarContainer.setOrientation(LinearLayout.VERTICAL);
-        avatarContainer.setGravity(Gravity.CENTER);
-        avatarContainer.setPadding(18, 12, 18, 12);
-        avatarContainer.setBackground(createBg("#FFB703", "#FFFFFF", 50f, 2));
+        FrameLayout.LayoutParams bubbleParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+        );
+        bubbleParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        bubbleParams.setMargins(0, 0, 0, 10);
+        speechBubble.setLayoutParams(bubbleParams);
 
-        TextView face = new TextView(this);
-        face.setText("🌸 (•̀ᴗ•́)و 🌸");
-        face.setTextColor(Color.parseColor("#0B0F19"));
-        face.setTextSize(15);
-        face.setTypeface(null, android.graphics.Typeface.BOLD);
-        avatarContainer.addView(face);
+        // Hunter Cha Card (Avatar)
+        avatarCard = new LinearLayout(this);
+        avatarCard.setOrientation(LinearLayout.HORIZONTAL);
+        avatarCard.setGravity(Gravity.CENTER_VERTICAL);
+        avatarCard.setPadding(20, 14, 24, 14);
+        avatarCard.setBackground(createBg("#1E293B", "#38BDF8", 40f, 3));
 
-        FrameLayout.LayoutParams aParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
-        aParams.setMargins(0, 45, 0, 0);
-        avatarContainer.setLayoutParams(aParams);
+        TextView emblem = new TextView(this);
+        emblem.setText("⚔️");
+        emblem.setTextSize(20);
+        emblem.setPadding(0, 0, 14, 0);
 
-        buildHud();
+        LinearLayout textGroup = new LinearLayout(this);
+        textGroup.setOrientation(LinearLayout.VERTICAL);
+
+        TextView titleView = new TextView(this);
+        titleView.setText("HUNTER CHA");
+        titleView.setTextColor(Color.parseColor("#38BDF8"));
+        titleView.setTextSize(13);
+        titleView.setTypeface(null, Typeface.BOLD);
+
+        TextView statusView = new TextView(this);
+        statusView.setText("S-Rank Companion • Tap");
+        statusView.setTextColor(Color.parseColor("#94A3B8"));
+        statusView.setTextSize(10);
+
+        textGroup.addView(titleView);
+        textGroup.addView(statusView);
+
+        avatarCard.addView(emblem);
+        avatarCard.addView(textGroup);
+
+        FrameLayout.LayoutParams avatarParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+        );
+        avatarParams.setMargins(0, 75, 0, 0);
+        avatarCard.setLayoutParams(avatarParams);
+
+        buildHudPanel();
 
         rootContainer.addView(speechBubble);
         rootContainer.addView(hudPanel);
-        rootContainer.addView(avatarContainer);
+        rootContainer.addView(avatarCard);
 
         wm.addView(rootContainer, params);
         isViewAttached = true;
-        setupDragAndTap();
+
+        setupDragAndClick();
     }
 
-    private void buildHud() {
+    private void buildHudPanel() {
         hudPanel = new LinearLayout(this);
         hudPanel.setOrientation(LinearLayout.VERTICAL);
         hudPanel.setPadding(24, 20, 24, 20);
-        hudPanel.setBackground(createBg("#F20F172A", "#FFB703", 24f, 2));
+        hudPanel.setBackground(createBg("#F80F172A", "#38BDF8", 24f, 2));
         hudPanel.setVisibility(View.GONE);
 
-        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(680, FrameLayout.LayoutParams.WRAP_CONTENT);
-        panelParams.setMargins(145, 0, 0, 0);
-        hudPanel.setLayoutParams(panelParams);
+        FrameLayout.LayoutParams hudParams = new FrameLayout.LayoutParams(
+                680, FrameLayout.LayoutParams.WRAP_CONTENT
+        );
+        hudParams.setMargins(0, 160, 0, 0);
+        hudPanel.setLayoutParams(hudParams);
 
-        TextView title = new TextView(this);
-        title.setText("HUNTER CHA • AI CORE");
-        title.setTextColor(Color.parseColor("#FFB703"));
+        TextView hudTitle = new TextView(this);
+        hudTitle.setText("AI SYSTEM HUB  •  LIVE");
+        hudTitle.setTextColor(Color.parseColor("#38BDF8"));
+        hudTitle.setTextSize(12);
+        hudTitle.setTypeface(null, Typeface.BOLD);
 
-        EditText chatInput = new EditText(this);
-        chatInput.setHint("Boliye ya type karein...");
-        chatInput.setHintTextColor(Color.parseColor("#64748B"));
-        chatInput.setTextColor(Color.WHITE);
-        chatInput.setTextSize(12);
-
+        // Input Bar
         LinearLayout chatBar = new LinearLayout(this);
         chatBar.setOrientation(LinearLayout.HORIZONTAL);
+        chatBar.setPadding(0, 12, 0, 14);
+
+        EditText input = new EditText(this);
+        input.setHint("Poocho ya mic se bolo...");
+        input.setHintTextColor(Color.parseColor("#64748B"));
+        input.setTextColor(Color.WHITE);
+        input.setTextSize(12);
+        input.setBackground(createBg("#1E293B", "#334155", 14f, 1));
+        input.setPadding(16, 12, 16, 12);
 
         Button micBtn = new Button(this);
         micBtn.setText("🎙️");
-        micBtn.setBackground(createBg("#FFB703", "#FFFFFF", 12f, 0));
+        micBtn.setBackground(createBg("#38BDF8", "#FFFFFF", 14f, 0));
         micBtn.setOnClickListener(v -> startListening());
 
         Button sendBtn = new Button(this);
         sendBtn.setText("Send");
-        sendBtn.setBackground(createBg("#FFB703", "#FFFFFF", 12f, 0));
+        sendBtn.setTextColor(Color.BLACK);
+        sendBtn.setBackground(createBg("#38BDF8", "#FFFFFF", 14f, 0));
         sendBtn.setOnClickListener(v -> {
-            String q = chatInput.getText().toString().trim();
+            String q = input.getText().toString().trim();
             if (!q.isEmpty()) {
-                chatInput.setText("");
+                input.setText("");
                 showBubble("Soch rahi hoon...");
-                fetchDeepAIResponse(q);
+                processCommandOrAskAI(q);
             }
         });
 
-        chatBar.addView(chatInput, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        chatBar.addView(micBtn, new LinearLayout.LayoutParams(110, LinearLayout.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams micLp = new LinearLayout.LayoutParams(110, LinearLayout.LayoutParams.WRAP_CONTENT);
+        micLp.setMargins(6, 0, 6, 0);
+
+        chatBar.addView(input, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        chatBar.addView(micBtn, micLp);
         chatBar.addView(sendBtn, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        hudPanel.addView(title);
+        // Quick Controls
+        LinearLayout controlsRow = new LinearLayout(this);
+        controlsRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button flashBtn = createButton("Flash");
+        flashBtn.setOnClickListener(v -> toggleFlashlight());
+
+        Button batteryBtn = createButton("Battery");
+        batteryBtn.setOnClickListener(v -> checkBattery());
+
+        Button waBtn = createButton("WhatsApp");
+        waBtn.setOnClickListener(v -> openWhatsApp());
+
+        Button volBtn = createButton("Vol Max");
+        volBtn.setOnClickListener(v -> maxVolume());
+
+        controlsRow.addView(flashBtn);
+        controlsRow.addView(batteryBtn);
+        controlsRow.addView(waBtn);
+        controlsRow.addView(volBtn);
+
+        hudPanel.addView(hudTitle);
         hudPanel.addView(chatBar);
+        hudPanel.addView(controlsRow);
+    }
+
+    private Button createButton(String label) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(11);
+        b.setTextColor(Color.parseColor("#38BDF8"));
+        b.setBackground(createBg("#1538BDF8", "#38BDF8", 12f, 1));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        lp.setMargins(4, 0, 4, 0);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    private void processCommandOrAskAI(String query) {
+        String lower = query.toLowerCase();
+        if (lower.contains("torch") || lower.contains("flash")) {
+            toggleFlashlight();
+        } else if (lower.contains("battery") || lower.contains("charge")) {
+            checkBattery();
+        } else if (lower.contains("whatsapp")) {
+            openWhatsApp();
+        } else if (lower.contains("volume") || lower.contains("aawaz")) {
+            maxVolume();
+        } else {
+            fetchDeepAIResponse(query);
+        }
     }
 
     private void fetchDeepAIResponse(String prompt) {
         networkPool.execute(() -> {
-            String responseText;
+            String answer;
             try {
                 URL url = new URL("https://text.pollinations.ai/");
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -288,23 +390,26 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
                 conn.setReadTimeout(9000);
                 conn.setDoOutput(true);
 
-                JSONObject jsonBody = new JSONObject();
-                JSONArray messages = new JSONArray();
-                JSONObject sys = new JSONObject();
-                sys.put("role", "system");
-                sys.put("content", "You are Hunter Cha AI twin companion. Reply sharp and funny in natural Hinglish under 25 words.");
-                messages.put(sys);
+                String sysContext = "You are Hunter Cha (Cha Hae-In) from Solo Leveling, acting as a personal Android companion twin. Reply directly in funny, smart, natural Hinglish like a real partner. Keep replies under 25 words.";
 
-                JSONObject userMsg = new JSONObject();
-                userMsg.put("role", "user");
-                userMsg.put("content", prompt);
-                messages.put(userMsg);
+                JSONObject json = new JSONObject();
+                JSONArray msgs = new JSONArray();
 
-                jsonBody.put("messages", messages);
-                jsonBody.put("model", "openai");
+                JSONObject sObj = new JSONObject();
+                sObj.put("role", "system");
+                sObj.put("content", sysContext);
+                msgs.put(sObj);
+
+                JSONObject uObj = new JSONObject();
+                uObj.put("role", "user");
+                uObj.put("content", prompt);
+                msgs.put(uObj);
+
+                json.put("messages", msgs);
+                json.put("model", "openai");
 
                 try (OutputStream os = conn.getOutputStream()) {
-                    os.write(jsonBody.toString().getBytes(StandardCharsets.UTF_8));
+                    os.write(json.toString().getBytes(StandardCharsets.UTF_8));
                 }
 
                 if (conn.getResponseCode() == 200) {
@@ -312,15 +417,15 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
                     StringBuilder sb = new StringBuilder();
                     String line;
                     while ((line = br.readLine()) != null) sb.append(line);
-                    responseText = sb.toString().trim();
+                    answer = sb.toString().trim();
                 } else {
-                    responseText = "Bilkul bhai! Sab ready hai, bolo aage kya karein?";
+                    answer = "Main ready hoon bhai, bolo aage kya plan hai?";
                 }
             } catch (Exception e) {
-                responseText = "Network slow hai bhai, baaki systems full ready hain!";
+                answer = "Network thoda slow hai, par systems online hain!";
             }
 
-            final String finalAns = responseText;
+            final String finalAns = answer;
             handler.post(() -> {
                 showBubble(finalAns);
                 speakNaturally(finalAns);
@@ -328,29 +433,87 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
         });
     }
 
-    private void setupDragAndTap() {
-        avatarContainer.setOnTouchListener(new View.OnTouchListener() {
+    private void toggleFlashlight() {
+        try {
+            if (cameraId != null && cameraManager != null) {
+                isFlashlightOn = !isFlashlightOn;
+                cameraManager.setTorchMode(cameraId, isFlashlightOn);
+                String msg = isFlashlightOn ? "Torch On! 🔦" : "Torch Off!";
+                showBubble(msg);
+                speakNaturally(msg);
+            }
+        } catch (CameraAccessException e) {
+            Toast.makeText(this, "Torch error", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void checkBattery() {
+        IntentFilter ifilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+        Intent bStatus = registerReceiver(null, ifilter);
+        int level = bStatus != null ? bStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) : -1;
+        String msg = "Battery " + level + "% hai!";
+        showBubble(msg);
+        speakNaturally(msg);
+    }
+
+    private void openWhatsApp() {
+        PackageManager pm = getPackageManager();
+        Intent intent = pm.getLaunchIntentForPackage("com.whatsapp");
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } else {
+            showBubble("WhatsApp install nahi hai!");
+        }
+    }
+
+    private void maxVolume() {
+        if (audioManager != null) {
+            int max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, max, AudioManager.FLAG_SHOW_UI);
+            showBubble("Volume full kar diya! 🔊");
+            speakNaturally("Volume full ho gaya!");
+        }
+    }
+
+    private void setupDragAndClick() {
+        avatarCard.setOnTouchListener(new View.OnTouchListener() {
             private int initialX, initialY;
             private float initialTouchX, initialTouchY;
-            private long startTime;
+            private long touchStartTime;
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
-                        startTime = System.currentTimeMillis();
-                        initialX = params.x; initialY = params.y;
-                        initialTouchX = event.getRawX(); initialTouchY = event.getRawY();
+                        touchStartTime = System.currentTimeMillis();
+                        initialX = params.x;
+                        initialY = params.y;
+                        initialTouchX = event.getRawX();
+                        initialTouchY = event.getRawY();
                         return true;
+
                     case MotionEvent.ACTION_MOVE:
                         params.x = initialX + (int) (event.getRawX() - initialTouchX);
                         params.y = initialY + (int) (event.getRawY() - initialTouchY);
-                        if (isViewAttached) wm.updateViewLayout(rootContainer, params);
+                        if (isViewAttached) {
+                            wm.updateViewLayout(rootContainer, params);
+                        }
                         return true;
+
                     case MotionEvent.ACTION_UP:
-                        long duration = System.currentTimeMillis() - startTime;
-                        if (duration < 250 && Math.abs(event.getRawX() - initialTouchX) < 15) {
+                        long duration = System.currentTimeMillis() - touchStartTime;
+                        float diffX = Math.abs(event.getRawX() - initialTouchX);
+                        float diffY = Math.abs(event.getRawY() - initialTouchY);
+
+                        // Clean click detect
+                        if (duration < 300 && diffX < 20 && diffY < 20) {
                             toggleHud();
+                        } else {
+                            // Auto-dock to screen edge
+                            int screenWidth = getResources().getDisplayMetrics().widthPixels;
+                            params.x = (params.x < screenWidth / 2) ? 20 : (screenWidth - 260);
+                            if (isViewAttached) wm.updateViewLayout(rootContainer, params);
                         }
                         return true;
                 }
@@ -362,28 +525,20 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
     private void toggleHud() {
         isHudOpen = !isHudOpen;
         hudPanel.setVisibility(isHudOpen ? View.VISIBLE : View.GONE);
-        if (isHudOpen) speakNaturally("Hunter Cha ready!");
+        if (isHudOpen) {
+            // HUD open hote hi keyboard input enable karne ke liye flag update
+            params.flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+            speakNaturally("Hunter Cha online!");
+        } else {
+            params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        }
+        if (isViewAttached) wm.updateViewLayout(rootContainer, params);
     }
 
     private void showBubble(String text) {
         speechBubble.setText(text);
         speechBubble.setVisibility(View.VISIBLE);
         handler.postDelayed(() -> speechBubble.setVisibility(View.GONE), 4000);
-    }
-
-    private void startRoaming() {
-        roamRunnable = new Runnable() {
-            @Override
-            public void run() {
-                if (isViewAttached && isPetVisible && !isHudOpen && rootContainer != null) {
-                    params.x = Math.max(20, Math.min(params.x + (random.nextInt(25) - 12), 850));
-                    params.y = Math.max(100, Math.min(params.y + (random.nextInt(19) - 9), 1700));
-                    wm.updateViewLayout(rootContainer, params);
-                }
-                handler.postDelayed(this, 2000);
-            }
-        };
-        handler.postDelayed(roamRunnable, 2500);
     }
 
     @Override
@@ -396,10 +551,16 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
 
     private void toggleVisibility() {
         if (isPetVisible) {
-            if (isViewAttached) { wm.removeView(rootContainer); isViewAttached = false; }
+            if (isViewAttached) {
+                wm.removeView(rootContainer);
+                isViewAttached = false;
+            }
             isPetVisible = false;
         } else {
-            if (!isViewAttached) { wm.addView(rootContainer, params); isViewAttached = true; }
+            if (!isViewAttached) {
+                wm.addView(rootContainer, params);
+                isViewAttached = true;
+            }
             isPetVisible = true;
         }
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -410,11 +571,17 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
         Intent toggleIntent = new Intent(this, JarvisOverlayService.class);
         toggleIntent.setAction(ACTION_TOGGLE);
         PendingIntent pi = PendingIntent.getService(this, 0, toggleIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification.Builder builder = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ? new Notification.Builder(this, CHANNEL_ID) : new Notification.Builder(this);
+
+        Notification.Builder builder = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                ? new Notification.Builder(this, CHANNEL_ID)
+                : new Notification.Builder(this);
+
         return builder.setContentTitle("Hunter Cha Companion")
-                .setContentText(visible ? "Tap to HIDE" : "Tap to SHOW")
+                .setContentText(visible ? "Tap to HIDE Hunter Cha" : "Tap to SHOW Hunter Cha")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentIntent(pi).setOngoing(true).build();
+                .setContentIntent(pi)
+                .setOngoing(true)
+                .build();
     }
 
     private GradientDrawable createBg(String bg, String stroke, float rad, int width) {
@@ -427,7 +594,7 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel chan = new NotificationChannel(CHANNEL_ID, "Hunter Cha", NotificationManager.IMPORTANCE_LOW);
+            NotificationChannel chan = new NotificationChannel(CHANNEL_ID, "Hunter Cha Service", NotificationManager.IMPORTANCE_LOW);
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) manager.createNotificationChannel(chan);
         }
@@ -436,7 +603,6 @@ public class JarvisOverlayService extends Service implements TextToSpeech.OnInit
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (roamRunnable != null) handler.removeCallbacks(roamRunnable);
         if (speechRecognizer != null) speechRecognizer.destroy();
         if (mediaPlayer != null) mediaPlayer.release();
         if (backupTts != null) backupTts.shutdown();
