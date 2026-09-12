@@ -35,4 +35,5 @@
             android:foregroundServiceType="specialUse" />
 
     </application>
+</manifest>    </application>
 </manifest></manifest>
