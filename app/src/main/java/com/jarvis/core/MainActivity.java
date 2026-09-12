@@ -15,26 +15,49 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "JARVIS requires overlay permission", Toast.LENGTH_LONG).show();
-            Intent intent = new Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + getPackageName())
-            );
-            startActivityForResult(intent, OVERLAY_PERMISSION_REQ_CODE);
-        } else {
-            launchJarvisService();
-        }
+        checkAndLaunchJarvis();
     }
 
-    private void launchJarvisService() {
+    private void checkAndLaunchJarvis() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "JARVIS ko 'Display over other apps' allow karein", Toast.LENGTH_LONG).show();
+                Intent intent = new Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName())
+                );
+                startActivityForResult(intent, OVERLAY_PERMISSION_REQ_CODE);
+                return;
+            }
+        }
+
+        launchService();
+    }
+
+    private void launchService() {
         Intent serviceIntent = new Intent(this, JarvisOverlayService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent);
         } else {
             startService(serviceIntent);
         }
+        Toast.makeText(this, "JARVIS Twin Core Active! ⚡", Toast.LENGTH_SHORT).show();
         finish();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == OVERLAY_PERMISSION_REQ_CODE) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
+                launchService();
+            } else {
+                Toast.makeText(this, "Permission zaroori hai JARVIS overlay chalane ke liye.", Toast.LENGTH_SHORT).show();
+                finish();
+            }
+        }
+    }
+}        finish();
     }
 
     @Override
